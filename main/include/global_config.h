@@ -4,8 +4,8 @@
 /*  I2S Microphone (MEMS) pins                                              */
 /* -------------------------------------------------------------------------- */
 #define PIN_I2S_MIC_BCLK    6    /* Bit clock */
-#define PIN_I2S_MIC_LRCLK   5    /* Left-right clock (word select) */
-#define PIN_I2S_MIC_DIN     4    /* Data in (from mic) */
+#define PIN_I2S_MIC_LRCLK   4    /* Left-right clock (word select) */
+#define PIN_I2S_MIC_DIN     5    /* Data in (from mic) */
 
 /* -------------------------------------------------------------------------- */
 /*  I2S Amplifier (MAX98357A) pins                                          */
