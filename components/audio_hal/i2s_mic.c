@@ -1,9 +1,6 @@
 #include "i2s_mic.h"
 #include "driver/i2s_std.h"
 #include "esp_err.h"
-
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 // #include "i2s_std.h"
 // #include <cstd.io>
 
