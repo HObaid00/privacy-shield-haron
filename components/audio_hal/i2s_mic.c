@@ -4,23 +4,17 @@
 #include "driver/i2s_std.h"
 #include "esp_log.h"
 #include "driver/uart.h"
-
-// Pin configuration
-#define I2S_WS_PIN    4  
-#define I2S_DOUT_PIN  5  
-#define I2S_BCLK_PIN  6
-
-#define TEST_MIC true
+#include "global_config.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "AUDIO_HAL_MIC";
 static i2s_chan_handle_t rx_handle;
 
-// Assume you created this queue in main.c to connect the Mic to the AI
-extern QueueHandle_t audio_ai_queue;
-
 void audio_hal_mic_init(void) {
-    // Boost USB baud rate for high data throughput
+#ifdef CONFIG_PRIVACY_SHIELD_DEBUG_MODE
+    // Boost USB baud rate for raw sample streaming
     uart_set_baudrate(UART_NUM_0, 2000000);
+#endif
     
     ESP_LOGI(TAG, "Initializing I2S microphone hardware...");
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
@@ -32,10 +26,10 @@ void audio_hal_mic_init(void) {
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_MONO),
         .gpio_cfg = {
             .mclk = -1,             
-            .bclk = I2S_BCLK_PIN,
-            .ws   = I2S_WS_PIN,
+            .bclk = PIN_I2S_MIC_BCLK,
+            .ws   = PIN_I2S_MIC_LRCLK,
             .dout = -1,             
-            .din  = I2S_DOUT_PIN,   
+            .din  = PIN_I2S_MIC_DIN,   
             .invert_flags = {
                 .mclk_inv = false,
                 .bclk_inv = false,
@@ -83,24 +77,23 @@ void audio_hal_mic_read_task(void *pvParameters) {
             } 
             // Audio streaming phase
             else {
-                if (TEST_MIC) {
-                    for (int i = 0; i < samples_read; i++) {
-                        // Apply offset correction and print to serial
-                        printf("%ld\n", (raw_samples[i] >> 16) - dc_offset);
-                    }
+#ifdef CONFIG_PRIVACY_SHIELD_DEBUG_MODE
+                for (int i = 0; i < samples_read; i++) {
+                    // Apply offset correction and print to serial
+                    printf("%ld\n", (raw_samples[i] >> 16) - dc_offset);
                 }
-                else {
-                    // Convert 32-bit I2S data to 16-bit standard audio for the AI
-                    for (int i = 0; i < samples_read; i++) {
-                        // Shift down to 16-bit
-                        ai_buffer[i] = (int16_t)(raw_samples[i] >> 16); 
-                    }
+#else
+                // Convert 32-bit I2S data to 16-bit standard audio for the AI
+                for (int i = 0; i < samples_read; i++) {
+                    // Shift down to 16-bit
+                    ai_buffer[i] = (int16_t)(raw_samples[i] >> 16); 
+                }
 
-                    // Send the chunk of audio to the DSP Engine
-                    /* if (audio_ai_queue != NULL) {
-                        xQueueSend(audio_ai_queue, &ai_buffer, 0);
-                    } */
-                }
+                // Send the chunk of audio to the DSP Engine
+                /* if (audio_ai_queue != NULL) {
+                    xQueueSend(audio_ai_queue, &ai_buffer, 0);
+                } */
+#endif
             }
         }
     }
