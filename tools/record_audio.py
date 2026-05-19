@@ -2,12 +2,15 @@ import serial
 import wave
 import struct
 import sys
+import os
+
+script_dir = os.path.dirname(os.path.abspath(__file__))
 
 # Serial configuration
 PORT = 'COM4' # Replace with your exact port
 BAUD_RATE = 2000000
 SAMPLE_RATE = 16000 
-OUTPUT_FILENAME = "audio.wav"
+OUTPUT_FILENAME = os.path.join(script_dir, "audio.wav")
 
 try:
     ser = serial.Serial(PORT, BAUD_RATE)
@@ -41,8 +44,8 @@ except KeyboardInterrupt:
     print(f"Saving audio to '{OUTPUT_FILENAME}'...")
     
     with wave.open(OUTPUT_FILENAME, 'w') as wav_file:
-        wav_file.setnchannels(1)   # Mono
-        wav_file.setsampwidth(2)   # 2 bytes per sample
+        wav_file.setnchannels(1) # Mono
+        wav_file.setsampwidth(2) # 2 bytes per sample
         wav_file.setframerate(SAMPLE_RATE)
         
         for sample in recorded_samples:
