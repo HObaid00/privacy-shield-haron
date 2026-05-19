@@ -5,9 +5,10 @@
 #include "esp_log.h"
 #include "driver/uart.h"
 #include "global_config.h"
+#include "log_tags.h"
 #include "sdkconfig.h"
 
-static const char *TAG = "AUDIO_HAL_MIC";
+static const char *TAG = LOG_TAG_AUDIO_MIC;
 static i2s_chan_handle_t rx_handle;
 
 void audio_hal_mic_init(void) {

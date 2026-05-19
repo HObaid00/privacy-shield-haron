@@ -111,12 +111,26 @@ static void log_levels_init(void) {
 
 ## Tags by file
 
-| File | TAG | What it logs |
-|---|---|---|
-| `esp_now_link.c` | `mesh_core` | Init, send failures (DEBUG/INFO), HELLO send (DEBUG) |
-| `node_discovery.c` | `discovery` | New neighbor (INFO), timeout (INFO), table overflow (WARN) |
-| `i2s_mic.c` | `AUDIO_HAL_MIC` | Calibration (INFO), buffer reads (DEBUG) |
-| `main.c` | `main` | Banner, neighbor count, HELLO received, commands (INFO) |
+All tags are defined in **`main/include/log_tags.h`** — the single source of truth.
+To add a new component, define its tag there first, then use it in the `.c` file.
+
+| File | Constant | Value | What it logs |
+|---|---|---|---|
+| `esp_now_link.c` | `LOG_TAG_MESH_CORE` | `"mesh_core"` | Init, send failures, HELLO send |
+| `node_discovery.c` | `LOG_TAG_DISCOVERY` | `"discovery"` | New neighbor, timeout, table overflow |
+| `i2s_mic.c` | `LOG_TAG_AUDIO_MIC` | `"AUDIO_HAL_MIC"` | Calibration, buffer reads |
+| `max_amp.c` | `LOG_TAG_AUDIO_AMP` | `"audio_amp"` | (future) Amplifier/transducer |
+| `vad.c` | `LOG_TAG_VAD` | `"dsp_vad"` | (future) Voice activity detection |
+| `noise_gen.c` | `LOG_TAG_NOISE_GEN` | `"dsp_noise"` | (future) Noise generation |
+| `aec_filter.c` | `LOG_TAG_AEC` | `"dsp_aec"` | (future) Echo cancellation |
+| `web_*.c` | `LOG_TAG_WEB` | `"web_dashboard"` | (future) Hub dashboard |
+| `main.c` | `LOG_TAG_MAIN` | `"main"` | Banner, neighbor count, commands |
+
+Usage in any `.c` file:
+```c
+#include "log_tags.h"
+static const char *TAG = LOG_TAG_MESH_CORE;  // pick your tag
+```
 
 ---
 

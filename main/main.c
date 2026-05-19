@@ -4,11 +4,12 @@
 #include "esp_log.h"
 #include "sdkconfig.h"
 #include "global_config.h"
+#include "log_tags.h"
 #include "mesh_core.h"
 #include "esp_mac.h"
 #include "audio_hal.h"
 
-static const char *TAG = "main";
+static const char *TAG = LOG_TAG_MAIN;
 
 /* -------------------------------------------------------------------------- */
 /*  Log level setup — see Kconfig.projbuild for per-subsystem toggles          */
@@ -27,22 +28,22 @@ static void log_levels_init(void) {
 
     /* Mesh subsystem */
 #ifdef CONFIG_PRIVACY_SHIELD_LOG_MESH
-    esp_log_level_set("mesh_core", ESP_LOG_DEBUG);
-    esp_log_level_set("discovery", ESP_LOG_DEBUG);
+    esp_log_level_set(LOG_TAG_MESH_CORE, ESP_LOG_DEBUG);
+    esp_log_level_set(LOG_TAG_DISCOVERY, ESP_LOG_DEBUG);
 #else
-    esp_log_level_set("mesh_core", ESP_LOG_WARN);
-    esp_log_level_set("discovery", ESP_LOG_WARN);
+    esp_log_level_set(LOG_TAG_MESH_CORE, ESP_LOG_WARN);
+    esp_log_level_set(LOG_TAG_DISCOVERY, ESP_LOG_WARN);
 #endif
 
     /* Audio subsystem */
 #ifdef CONFIG_PRIVACY_SHIELD_LOG_AUDIO
-    esp_log_level_set("AUDIO_HAL_MIC", ESP_LOG_DEBUG);
+    esp_log_level_set(LOG_TAG_AUDIO_MIC, ESP_LOG_DEBUG);
 #else
-    esp_log_level_set("AUDIO_HAL_MIC", ESP_LOG_WARN);
+    esp_log_level_set(LOG_TAG_AUDIO_MIC, ESP_LOG_WARN);
 #endif
 
     /* Main always at INFO */
-    esp_log_level_set("main", ESP_LOG_INFO);
+    esp_log_level_set(LOG_TAG_MAIN, ESP_LOG_INFO);
 
     ESP_LOGI(TAG, "Log levels initialized");
 }
