@@ -1,5 +1,9 @@
 {
   "C_Cpp.intelliSenseEngine": "default",
+  "C_Cpp.default.includePath": [
+    "${workspaceFolder}/main/include",
+    "${workspaceFolder}/components/**/include"
+  ],
   "clangd.arguments": [
     "--background-index",
     "--query-driver=**",
@@ -11,7 +15,5 @@
   "idf.openOcdConfigs": [
     "board/esp32s3-builtin.cfg"
   ],
-  "idf.currentSetup": "/home/haron/.espressif/v5.5.4/esp-idf",
-  "idf.port": "/dev/ttyUSB0",
   "idf.flashType": "UART"
 }
