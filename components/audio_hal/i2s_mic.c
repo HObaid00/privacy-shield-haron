@@ -1,8 +1,7 @@
 #include "i2s_mic.h"
 #include "driver/i2s_std.h"
 #include "esp_err.h"
-// #include "i2s_std.h"
-// #include <cstd.io>
+#include "esp_sr"
 
 #define I2S_DIN GPIO_NUM_4  // Microphone data in = SD
 #define I2S_BCLK GPIO_NUM_5 // SCK is the new BCLK
