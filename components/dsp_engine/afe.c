@@ -1,5 +1,9 @@
 #include "afe.h"
 
+/**
+ * AFE - Audio Front End
+ */
+
 #include <stdlib.h>
 #include <string.h>
 
