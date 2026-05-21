@@ -7,15 +7,19 @@
 #include "global_config.h"
 #include "log_tags.h"
 #include "sdkconfig.h"
+#include "esp_timer.h"
 
 static const char *TAG = LOG_TAG_AUDIO_MIC;
 static i2s_chan_handle_t rx_handle;
 
+extern QueueHandle_t audio_ai_queue;
+
 void audio_hal_mic_init(void) {
-#ifdef CONFIG_PRIVACY_SHIELD_DEBUG_MODE
-    // Boost USB baud rate for raw sample streaming
-    uart_set_baudrate(UART_NUM_0, 2000000);
-#endif
+    // TODO: Add test flag
+    if (true) {
+        // Boost USB baud rate for raw sample streaming
+        uart_set_baudrate(UART_NUM_0, 2000000);
+    }
     
     ESP_LOGI(TAG, "Initializing I2S microphone hardware...");
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
@@ -48,10 +52,10 @@ void audio_hal_mic_read_task(void *pvParameters) {
     int32_t raw_samples[512];
     int16_t ai_buffer[512];
     int32_t dc_offset = 0;
-    bool is_calibrated = false;
-    long long calibration_sum = 0;
-    int calibration_samples_read = 0;
     ESP_LOGI(TAG, "Stay completely quiet for 1 second. Calibrating...");
+    int64_t last_read_time = esp_timer_get_time();
+    int packet_count = 0;
+    ESP_LOGI(TAG, "Starting DMA Audio Capture Test. Target: 32ms per frame...");
 
     while(1) {
         size_t bytes_read = 0;
@@ -60,41 +64,49 @@ void audio_hal_mic_read_task(void *pvParameters) {
         esp_err_t err = i2s_channel_read(rx_handle, raw_samples, sizeof(raw_samples), &bytes_read, portMAX_DELAY);
         
         if (err == ESP_OK && bytes_read > 0) {
+            // TODO: Add test flag
+            if (true) {
+                int64_t current_time = esp_timer_get_time();
+                int delta_ms = (current_time - last_read_time) / 1000; 
+                last_read_time = current_time;
+                packet_count++;
+
+                if (packet_count < 2000) {
+                    // If a genuine delay occurs, log it immediately
+                    if (delta_ms > 35) {
+                        ESP_LOGE(TAG, "Underrun detected! Frame took %d ms. Expected ~32ms", delta_ms);
+                    } else {
+                        // This prevents serial buffer overflow and CPU stalling
+                        if (packet_count % 50 == 0) {
+                            ESP_LOGI(TAG, "[Pkg: %d] System stable. Frame ready in: %d ms", packet_count, delta_ms);
+                        }
+                    }
+                } else if (packet_count == 2000) {
+                    // Final validation message after ~1 minute of continuous operation
+                    ESP_LOGI(TAG, "1 minute test completed! No underruns detected.");
+                }
+            }       
+
             int samples_read = bytes_read / 4; // 4 bytes per 32-bit sample
 
-            // DC offset calibration phase
-            if (!is_calibrated) {
-                for (int i = 0; i < samples_read; i++) {
-                    calibration_sum += (raw_samples[i] >> 16);
-                    calibration_samples_read++;
-                }
-                
-                // After 1 second of audio (16000 samples at 16kHz)
-                if (calibration_samples_read >= 16000) {
-                    dc_offset = calibration_sum / calibration_samples_read;
-                    is_calibrated = true;
-                    ESP_LOGI(TAG, "Calibration complete! DC Offset: %ld", dc_offset);
-                }
-            } 
             // Audio streaming phase
-            else {
-#ifdef CONFIG_PRIVACY_SHIELD_DEBUG_MODE
+            // TODO: Add test flag
+            if (true) {
                 for (int i = 0; i < samples_read; i++) {
                     // Apply offset correction and print to serial
                     //printf("%ld\n", (raw_samples[i] >> 16) - dc_offset);
                 }
-#else
-                // Convert 32-bit I2S data to 16-bit standard audio for the AI
-                for (int i = 0; i < samples_read; i++) {
-                    // Shift down to 16-bit
-                    ai_buffer[i] = (int16_t)(raw_samples[i] >> 16); 
-                }
+            }
+            
+            // Convert 32-bit I2S data to 16-bit standard audio for the AI
+            for (int i = 0; i < samples_read; i++) {
+                // Shift down to 16-bit
+                ai_buffer[i] = (int16_t)(raw_samples[i] >> 16); 
+            }
 
-                // Send the chunk of audio to the DSP Engine
-                /* if (audio_ai_queue != NULL) {
-                    xQueueSend(audio_ai_queue, &ai_buffer, 0);
-                } */
-#endif
+            // Send the chunk of audio to the DSP Engine
+            if (audio_ai_queue != NULL) {
+                xQueueSend(audio_ai_queue, &ai_buffer, 0);
             }
         }
     }

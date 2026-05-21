@@ -131,8 +131,19 @@ void app_main(void) {
     xTaskCreate(hello_task, "hello", 2048, NULL, 1, NULL);
     xTaskCreate(prune_task, "prune", 4096, NULL, 1, NULL);
 
+    ESP_LOGI(TAG, "Booting Privacy Shield System...");
+
+    audio_ai_queue = xQueueCreate(10, 512 * sizeof(int16_t));
+
+    if (audio_ai_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create audio queue!");
+        return;
+    }
+
     /* ---- Audio (I2S Microphone) ---- */
     audio_hal_mic_init();
+
+    // Run the microphone reading logic on Core 1
     xTaskCreatePinnedToCore(audio_hal_mic_read_task, "Mic_Task", 8192, NULL, 5, NULL, 1);
 
     ESP_LOGI(TAG, "System ready.");
