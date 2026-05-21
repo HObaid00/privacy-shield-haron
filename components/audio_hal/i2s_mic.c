@@ -5,10 +5,11 @@
 #include "esp_log.h"
 #include "driver/uart.h"
 #include "global_config.h"
+#include "log_tags.h"
 #include "sdkconfig.h"
 #include "esp_timer.h"
 
-static const char *TAG = "AUDIO_HAL_MIC";
+static const char *TAG = LOG_TAG_AUDIO_MIC;
 static i2s_chan_handle_t rx_handle;
 
 extern QueueHandle_t audio_ai_queue;
@@ -93,7 +94,7 @@ void audio_hal_mic_read_task(void *pvParameters) {
             if (true) {
                 for (int i = 0; i < samples_read; i++) {
                     // Apply offset correction and print to serial
-                    printf("%ld\n", (raw_samples[i] >> 16) - dc_offset);
+                    //printf("%ld\n", (raw_samples[i] >> 16) - dc_offset);
                 }
             }
             
