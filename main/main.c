@@ -11,6 +11,9 @@
 
 static const char *TAG = LOG_TAG_MAIN;
 
+
+QueueHandle_t audio_ai_queue;
+
 /* -------------------------------------------------------------------------- */
 /*  Log level setup — see Kconfig.projbuild for per-subsystem toggles          */
 /* -------------------------------------------------------------------------- */
