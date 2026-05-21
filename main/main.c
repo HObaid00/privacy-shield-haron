@@ -138,7 +138,12 @@ static void afe_processing_task(void *arg) {
 /* -------------------------------------------------------------------------- */
 /* Initialization Pipeline                                                    */
 /* -------------------------------------------------------------------------- */
-void privacy_shield_init(void) {
+void privacy_shield_init(void) {}
+
+/* -------------------------------------------------------------------------- */
+/* Entry point                                                               */
+/* -------------------------------------------------------------------------- */
+void app_main(void) {
   ESP_LOGI(TAG, "======================================");
   ESP_LOGI(TAG, "   Initializing Audio VAD Pipeline    ");
   ESP_LOGI(TAG, "======================================");
@@ -176,8 +181,3 @@ void privacy_shield_init(void) {
 
   ESP_LOGI(TAG, "System Pipeline Up and Operational.");
 }
-
-/* -------------------------------------------------------------------------- */
-/* Entry point                                                               */
-/* -------------------------------------------------------------------------- */
-void app_main(void) { privacy_shield_init(); }
