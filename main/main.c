@@ -1,8 +1,11 @@
 ﻿#include "afe.h"
 #include "audio_hal.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/projdefs.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "global_config.h"
 #include "mesh_core.h"
@@ -10,6 +13,7 @@
 
 static const char *TAG = "MAIN_APP";
 
+// Shared Queue handling raw audio chunks between Core 1 and Core 0
 QueueHandle_t audio_ai_queue;
 
 /* -------------------------------------------------------------------------- */
@@ -77,26 +81,15 @@ static void on_mesh_packet(const uint8_t *src_mac, const void *data,
     break;
   }
 }
-#include "afe.h"
-#include "audio_hal.h"
-#include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
-#include "freertos/task.h"
-#include "global_config.h"
-#include <stdio.h>
-
-static const char *TAG = "MAIN_APP";
-
-// Shared Queue handling raw audio chunks between Core 1 and Core 0
-extern QueueHandle_t audio_ai_queue;
 
 /* -------------------------------------------------------------------------- */
-/* AFE Processing Task — Pulls from queue, processes VAD                     */
+/* AFE Processing Task — Pulls from queue, processes VAD                      */
 /* -------------------------------------------------------------------------- */
 static void afe_processing_task(void *arg) {
+
   // Allocate space matching our expected I2S Mic frame chunk size (512 samples)
-  int16_t mic_frame[512];
+  int expected_chunks = audio_afe_get_feed_chunksize();
+  int16_t mic_frame[expected_chunks];
   audio_afe_result_t afe_res;
 
   // Track VAD state change to avoid spamming the log console
@@ -105,55 +98,44 @@ static void afe_processing_task(void *arg) {
   ESP_LOGI(TAG, "AFE processing task started on Core %d", xPortGetCoreID());
 
   while (1) {
+
     // Wait indefinitely until a raw mic chunk arrives from Core 1
-    if (xQueueReceive(audio_ai_queue, &mic_frame, portMAX_DELAY) == pdTRUE) {
+    if (xQueueReceive(audio_ai_queue, mic_frame, portMAX_DELAY) == pdTRUE) {
 
       // 1. Feed the 16-bit PCM block into the ESP Front End Engine
-      esp_err_t err = audio_afe_feed(mic_frame);
+      esp_err_t err = audio_afe_fetch(&afe_res);
       if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to feed audio to AFE");
+        vTaskDelay(pdMS_TO_TICKS(5));
         continue;
       }
 
       // 2. Fetch the calculated result from the AFE processing block
-      err = audio_afe_fetch(&afe_res);
       if (err == ESP_OK) {
 
         // Only print when the speech state actually flips
         if (afe_res.vad_state != last_vad_state) {
           if (afe_res.vad_state == AUDIO_AFE_VAD_SPEECH) {
-            ESP_LOGI(TAG, "🎙️ [VAD] Speech Detected!");
+            ESP_LOGI(TAG, "[VAD] Speech Detected!");
           } else if (afe_res.vad_state == AUDIO_AFE_VAD_SILENCE) {
-            ESP_LOGI(TAG, "🤫 [VAD] Silence...");
+            ESP_LOGI(TAG, "[VAD] Silence...");
           } else {
-            ESP_LOGW(TAG, "❓ [VAD] Unknown VAD state.");
+            ESP_LOGW(TAG, "[VAD] Unknown VAD state.");
           }
           last_vad_state = afe_res.vad_state;
         }
+      } else {
+        ESP_LOGE(TAG, "Failed to feed audio to AFE");
       }
     }
   }
 }
 
 /* -------------------------------------------------------------------------- */
-/* Initialization Pipeline                                                    */
-/* -------------------------------------------------------------------------- */
-void privacy_shield_init(void) {}
-
-/* -------------------------------------------------------------------------- */
 /* Entry point                                                               */
 /* -------------------------------------------------------------------------- */
 void app_main(void) {
-  ESP_LOGI(TAG, "======================================");
-  ESP_LOGI(TAG, "   Initializing Audio VAD Pipeline    ");
-  ESP_LOGI(TAG, "======================================");
-
-  // Create the FreeRTOS Queue to hold 10 chunks of 512-sample int16 arrays
-  audio_ai_queue = xQueueCreate(10, 512 * sizeof(int16_t));
-  if (audio_ai_queue == NULL) {
-    ESP_LOGE(TAG, "Critical: Failed to create audio queue!");
-    return;
-  }
+  // Initialize physical I2S Hardware
+  audio_hal_mic_init();
 
   // Initialize the ESP-SR Audio Front End in Single Microphone mode ("M")
   esp_err_t afe_err = audio_afe_init("M");
@@ -167,8 +149,12 @@ void app_main(void) {
   int expected_chunk = audio_afe_get_feed_chunksize();
   ESP_LOGI(TAG, "AFE Engine expects chunk size of: %d samples", expected_chunk);
 
-  // Initialize physical I2S Hardware
-  audio_hal_mic_init();
+  // Create the FreeRTOS Queue to hold 10 chunks of 512-sample int16 arrays
+  audio_ai_queue = xQueueCreate(10, expected_chunk * sizeof(int16_t));
+  if (audio_ai_queue == NULL) {
+    ESP_LOGE(TAG, "Critical: Failed to create audio queue!");
+    return;
+  }
 
   // Spawn the hardware reading loop on Core 1 (Pin down to decouple ISR/DMA
   // overhead)
@@ -176,8 +162,9 @@ void app_main(void) {
                           5, NULL, 1);
 
   // Spawn the AFE Heavy DSP Processing Loop on Core 0
-  xTaskCreatePinnedToCore(afe_processing_task, "AFE_Proc_Task", 8192, NULL, 5,
-                          NULL, 0);
+  // xTaskCreatePinnedToCore(afe_processing_task, "AFE_Proc_Task", 8192, NULL,
+  // 5,
+  //                         NULL, 0);
 
   ESP_LOGI(TAG, "System Pipeline Up and Operational.");
 }

@@ -1,9 +1,5 @@
 #include "afe.h"
 
-/**
- * AFE - Audio Front End
- */
-
 #include <stdlib.h>
 #include <string.h>
 
@@ -21,10 +17,10 @@ static const char *TAG = "audio_afe";
 static const esp_afe_sr_iface_t *afe_handle = NULL;
 static esp_afe_sr_data_t *afe_data = NULL;
 
-static int s_feed_chunksize = 0;
-static int s_feed_channels = 0;
-static int s_fetch_chunksize = 0;
-static int s_fetch_channels = 0;
+static int feed_chunksize = 0;
+static int feed_channels = 0;
+static int fetch_chunksize = 0;
+static int fetch_channels = 0;
 
 static audio_afe_vad_state_t convert_vad_state(vad_state_t state) {
   switch (state) {
@@ -39,23 +35,6 @@ static audio_afe_vad_state_t convert_vad_state(vad_state_t state) {
   }
 }
 
-int audio_afe_get_feed_chunksize(void) { return s_feed_chunksize; }
-
-int audio_afe_get_feed_channels(void) { return s_feed_channels; }
-
-int audio_afe_get_fetch_chunksize(void) { return s_fetch_chunksize; }
-
-int audio_afe_get_fetch_channels(void) { return s_fetch_channels; }
-
-/**
- * Audio Front End initailization process.
- * Takes a char @arg which represents the models
- *   "M"   : Microphone channel
- *   "N"   : Unused or unknown channel
- *   "R"   : Playback reference channel for AEC
- *   "MR"  : one mic + reference channel for AEC
- *   "MMR" : two mics + reference channel for AEC
- */
 esp_err_t audio_afe_init(const char *input_format) {
   if (afe_data != NULL) {
     ESP_LOGW(TAG, "AFE already initialized");
@@ -80,6 +59,11 @@ esp_err_t audio_afe_init(const char *input_format) {
   }
 
   /*
+   * Examples:
+   *   "M"   : one mic
+   *   "MR"  : one mic + reference channel for AEC
+   *   "MMR" : two mics + reference channel for AEC
+   *
    * AFE_TYPE_SR is the speech-recognition front-end mode.
    */
   afe_config_t *afe_config =
@@ -157,17 +141,17 @@ esp_err_t audio_afe_init(const char *input_format) {
     return ESP_FAIL;
   }
 
-  s_feed_chunksize = afe_handle->get_feed_chunksize(afe_data);
-  s_feed_channels = afe_handle->get_feed_channel_num(afe_data);
-  s_fetch_chunksize = afe_handle->get_fetch_chunksize(afe_data);
-  s_fetch_channels = afe_handle->get_fetch_channel_num(afe_data);
+  feed_chunksize = afe_handle->get_feed_chunksize(afe_data);
+  feed_channels = afe_handle->get_feed_channel_num(afe_data);
+  fetch_chunksize = afe_handle->get_fetch_chunksize(afe_data);
+  fetch_channels = afe_handle->get_fetch_channel_num(afe_data);
 
   ESP_LOGI(TAG, "AFE initialized");
   ESP_LOGI(TAG, "input_format=%s", input_format);
-  ESP_LOGI(TAG, "feed_chunksize=%d, feed_channels=%d", s_feed_chunksize,
-           s_feed_channels);
-  ESP_LOGI(TAG, "fetch_chunksize=%d, fetch_channels=%d", s_fetch_chunksize,
-           s_fetch_channels);
+  ESP_LOGI(TAG, "feed_chunksize=%d, feed_channels=%d", feed_chunksize,
+           feed_channels);
+  ESP_LOGI(TAG, "fetch_chunksize=%d, fetch_channels=%d", fetch_chunksize,
+           fetch_channels);
   ESP_LOGI(TAG, "VAD enabled");
   ESP_LOGI(TAG, "AEC %s", has_reference_channel ? "enabled" : "disabled");
 
@@ -186,7 +170,7 @@ esp_err_t audio_afe_feed(const int16_t *pcm) {
   /*
    * pcm must contain:
    *
-   *   s_feed_chunksize * s_feed_channels
+   *   feed_chunksize * feed_channels
    *
    * int16_t samples.
    */
@@ -223,11 +207,19 @@ esp_err_t audio_afe_fetch(audio_afe_result_t *out_result) {
 
   out_result->data = result->data;
   out_result->samples = result->data_size / sizeof(int16_t);
-  out_result->channels = s_fetch_channels;
+  out_result->channels = fetch_channels;
   out_result->vad_state = convert_vad_state(result->vad_state);
 
   return ESP_OK;
 }
+
+int audio_afe_get_feed_chunksize(void) { return feed_chunksize; }
+
+int audio_afe_get_feed_channels(void) { return feed_channels; }
+
+int audio_afe_get_fetch_chunksize(void) { return fetch_chunksize; }
+
+int audio_afe_get_fetch_channels(void) { return fetch_channels; }
 
 void audio_afe_destroy(void) {
   if (afe_handle != NULL && afe_data != NULL) {
@@ -237,10 +229,10 @@ void audio_afe_destroy(void) {
   afe_data = NULL;
   afe_handle = NULL;
 
-  s_feed_chunksize = 0;
-  s_feed_channels = 0;
-  s_fetch_chunksize = 0;
-  s_fetch_channels = 0;
+  feed_chunksize = 0;
+  feed_channels = 0;
+  fetch_chunksize = 0;
+  fetch_channels = 0;
 
   ESP_LOGI(TAG, "AFE destroyed");
 }
