@@ -7,17 +7,58 @@
 #include "freertos/projdefs.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "esp_log.h"
+#include "sdkconfig.h"
 #include "global_config.h"
+#include "log_tags.h"
 #include "mesh_core.h"
 #include <stdio.h>
 
-static const char *TAG = "MAIN_APP";
+static const char *TAG = LOG_TAG_MAIN;
+
 
 // Shared Queue handling raw audio chunks between Core 1 and Core 0
 QueueHandle_t audio_ai_queue = NULL;
 
 /* -------------------------------------------------------------------------- */
-/*  Hello task — broadcast our presence every 5 seconds                       */
+/*  Log level setup — see Kconfig.projbuild for per-subsystem toggles          */
+/* -------------------------------------------------------------------------- */
+
+static void log_levels_init(void) {
+    
+#ifdef CONFIG_PRIVACY_SHIELD_BUILD_PRODUCTION
+    /* Production: everything quiet */
+    esp_log_level_set("*", ESP_LOG_WARN);
+    return;
+#endif
+
+    /* Set global default to INFO — clean base level */
+    esp_log_level_set("*", ESP_LOG_INFO);
+
+    /* Mesh subsystem */
+#ifdef CONFIG_PRIVACY_SHIELD_LOG_MESH
+    esp_log_level_set(LOG_TAG_MESH_CORE, ESP_LOG_DEBUG);
+    esp_log_level_set(LOG_TAG_DISCOVERY, ESP_LOG_DEBUG);
+#else
+    esp_log_level_set(LOG_TAG_MESH_CORE, ESP_LOG_WARN);
+    esp_log_level_set(LOG_TAG_DISCOVERY, ESP_LOG_WARN);
+#endif
+
+    /* Audio subsystem */
+#ifdef CONFIG_PRIVACY_SHIELD_LOG_AUDIO
+    esp_log_level_set(LOG_TAG_AUDIO_MIC, ESP_LOG_DEBUG);
+#else
+    esp_log_level_set(LOG_TAG_AUDIO_MIC, ESP_LOG_WARN);
+#endif
+
+    /* Main always at INFO */
+    esp_log_level_set(LOG_TAG_MAIN, ESP_LOG_INFO);
+
+    ESP_LOGI(TAG, "Log levels initialized");
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Hello task — broadcast our presence every 10 seconds                      */
 /* -------------------------------------------------------------------------- */
 
 static void hello_task(void *arg) {
@@ -86,6 +127,20 @@ static void on_mesh_packet(const uint8_t *src_mac, const void *data,
 /* Entry point                                                               */
 /* -------------------------------------------------------------------------- */
 void app_main(void) {
+  log_levels_init();
+
+    ESP_LOGI(TAG, "======================================");
+    ESP_LOGI(TAG, "  Privacy Shield — Node %u", DEFAULT_NODE_ID);
+    ESP_LOGI(TAG, "======================================");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    /* ---- Mesh (ESP-NOW) ---- */
+    ESP_ERROR_CHECK(mesh_init(DEFAULT_NODE_ID));
+    mesh_register_recv_callback(on_mesh_packet);
+    xTaskCreate(hello_task, "hello", 2048, NULL, 1, NULL);
+    xTaskCreate(prune_task, "prune", 4096, NULL, 1, NULL);
+
+    ESP_LOGI(TAG, "Booting Privacy Shield System...");
+  
   // Initialize the ESP-SR Audio Front End in Single Microphone mode ("M")
   esp_err_t afe_err = audio_afe_init("M");
   if (afe_err != ESP_OK) {
