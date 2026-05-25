@@ -10,17 +10,25 @@
 #include "esp_afe_sr_iface.h"
 #include "esp_afe_sr_models.h"
 #include "esp_mn_models.h"
+#include "freertos/idf_additions.h"
+#include "freertos/projdefs.h"
+#include "global_config.h"
 #include "model_path.h"
 
-static const char *TAG = "audio_afe";
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+
+static const char *TAG = "LOG_TAG_AUDIO_AFE";
 
 static const esp_afe_sr_iface_t *afe_handle = NULL;
 static esp_afe_sr_data_t *afe_data = NULL;
+extern QueueHandle_t audio_ai_queue;
 
 static int feed_chunksize = 0;
 static int feed_channels = 0;
 static int fetch_chunksize = 0;
 static int fetch_channels = 0;
+static audio_afe_vad_state_t AFE_STATE;
 
 static audio_afe_vad_state_t convert_vad_state(vad_state_t state) {
   switch (state) {
@@ -79,8 +87,8 @@ esp_err_t audio_afe_init(const char *input_format) {
    */
   afe_config->vad_init = true;
   afe_config->vad_mode = VAD_MODE_1;
-  afe_config->vad_min_noise_ms = 1000;
-  afe_config->vad_min_speech_ms = 128;
+  afe_config->vad_min_noise_ms = 500;
+  afe_config->vad_min_speech_ms = 64;
   afe_config->vad_delay_ms = 128;
 
   /*
@@ -160,24 +168,19 @@ esp_err_t audio_afe_init(const char *input_format) {
 
 esp_err_t audio_afe_feed(const int16_t *pcm) {
   if (afe_handle == NULL || afe_data == NULL) {
+    ESP_LOGE(TAG, "AFE not initialized");
     return ESP_ERR_INVALID_STATE;
   }
 
   if (pcm == NULL) {
+    ESP_LOGE(TAG, "pcm is NULL");
     return ESP_ERR_INVALID_ARG;
   }
 
-  /*
-   * pcm must contain:
-   *
-   *   feed_chunksize * feed_channels
-   *
-   * int16_t samples.
-   */
   int ret = afe_handle->feed(afe_data, pcm);
 
   if (ret < 0) {
-    ESP_LOGE(TAG, "AFE feed failed: %d", ret);
+    ESP_LOGE(TAG, "AFE feed returned: %d", ret);
     return ESP_FAIL;
   }
 
@@ -213,13 +216,7 @@ esp_err_t audio_afe_fetch(audio_afe_result_t *out_result) {
   return ESP_OK;
 }
 
-int audio_afe_get_feed_chunksize(void) { return feed_chunksize; }
-
-int audio_afe_get_feed_channels(void) { return feed_channels; }
-
-int audio_afe_get_fetch_chunksize(void) { return fetch_chunksize; }
-
-int audio_afe_get_fetch_channels(void) { return fetch_channels; }
+audio_afe_vad_state_t get_afe_state() { return AFE_STATE; }
 
 void audio_afe_destroy(void) {
   if (afe_handle != NULL && afe_data != NULL) {
@@ -235,4 +232,58 @@ void audio_afe_destroy(void) {
   fetch_channels = 0;
 
   ESP_LOGI(TAG, "AFE destroyed");
+}
+
+/* -------------------------------------------------------------------------- */
+/* AFE Processing Task — Pulls from queue, processes VAD / NS / AEC           */
+/* -------------------------------------------------------------------------- */
+void afe_processing_task(void *pvParameters) {
+
+  int16_t mic_frame[AFE_FEED_SAMPLES];
+  int feed_bytes = 0;
+
+  // Track VAD state change to avoid spamming the log console
+  AFE_STATE = AUDIO_AFE_VAD_SILENCE;
+
+  ESP_LOGI(TAG, "AFE processing task started on Core %d", xPortGetCoreID());
+
+  while (1) {
+
+    // Wait indefinitely until a raw mic chunk arrives from Core 1
+    if (xQueueReceive(audio_ai_queue, mic_frame, portMAX_DELAY) == pdTRUE) {
+
+      feed_bytes += AFE_FEED_SAMPLES;
+      // 1. Feed the 16-bit PCM block into the ESP Front End Engine
+      esp_err_t err = audio_afe_feed(mic_frame);
+      if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to feed AFE: %s", esp_err_to_name(err));
+        continue;
+      }
+
+      if (feed_bytes > fetch_chunksize) {
+
+        audio_afe_result_t result;
+        err = audio_afe_fetch(&result);
+        feed_bytes -= fetch_chunksize;
+
+        if (err != ESP_OK) {
+          // Not fatal. AFE may not have enough output ready yet.
+          vTaskDelay(pdMS_TO_TICKS(1));
+          continue;
+        }
+
+        if (result.vad_state != AFE_STATE) {
+          if (result.vad_state == AUDIO_AFE_VAD_SPEECH) {
+            ESP_LOGI(TAG, "[VAD] Speech detected!");
+          } else if (result.vad_state == AUDIO_AFE_VAD_SILENCE) {
+            ESP_LOGI(TAG, "[VAD] Silence...");
+          } else {
+            ESP_LOGW(TAG, "[VAD] Unknown VAD state.");
+          }
+
+          AFE_STATE = result.vad_state;
+        }
+      }
+    }
+  }
 }

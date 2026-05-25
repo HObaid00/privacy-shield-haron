@@ -8,6 +8,8 @@
 extern "C" {
 #endif
 
+#define AFE_FEED_SAMPLES 160 // Number of raw data samples for Audio Queue
+
 typedef enum {
   AUDIO_AFE_VAD_SILENCE = 0,
   AUDIO_AFE_VAD_SPEECH,
@@ -35,6 +37,12 @@ typedef struct {
 esp_err_t audio_afe_init(const char *input_format);
 
 /**
+ * Returns the lates state of the AFE through either
+ * Speech recognized, Silence or Unknown
+ * */
+audio_afe_vad_state_t get_afe_state(void);
+
+/**
  * Feed one frame of raw int16 PCM into the AFE.
  *
  * The buffer must contain:
@@ -53,11 +61,22 @@ esp_err_t audio_afe_feed(const int16_t *pcm);
  */
 esp_err_t audio_afe_fetch(audio_afe_result_t *out_result);
 
-int audio_afe_get_feed_chunksize(void);
-int audio_afe_get_feed_channels(void);
-int audio_afe_get_fetch_chunksize(void);
-int audio_afe_get_fetch_channels(void);
+/**
+ * The Audio Front End Task that is constantly running
+ * Called from app_main
+ * must run audio_afe_init before running this Task
+ * Task runs and check if speech is recognized
+ *
+ * Loop is
+ * Audio in  -> audio_afe_feed -> proccess
+ * VAD / AEC / NS -> audio_afe_fetch ->
+ * Update AFE_STATE
+ * */
+void afe_processing_task(void *pvParameters);
 
+/**
+ * Audio Front End Destructor essentially
+ * */
 void audio_afe_destroy(void);
 
 #ifdef __cplusplus

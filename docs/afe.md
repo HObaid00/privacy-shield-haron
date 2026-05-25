@@ -1,353 +1,300 @@
-# Audio Front End Module
+# ESP-SR Audio Front End Documentation
 
 ## Purpose
 
-The `afe.c` and `afe.h` files define a small wrapper module around the **ESP-SR Audio Front End**, usually shortened to **AFE**.
+The `afe.c` and `afe.h` files implement a wrapper around Espressif's **ESP-SR Audio Front End (AFE)**.
 
-The AFE module is responsible for connecting raw microphone audio to Espressif's speech-processing pipeline.
+This module connects the project’s I2S microphone pipeline to ESP-SR processing.
 
-In this project, the AFE is used for:
+The current AFE module is responsible for:
 
 - **VAD** — Voice Activity Detection
 - **NS** — Noise Suppression
-- **AEC** — Acoustic Echo Cancellation, if a playback reference channel is available
+- **AEC** — Acoustic Echo Cancellation, only if a playback reference channel exists
+- Tracking the latest VAD state through `get_afe_state()`
+- Running `afe_processing_task()`, which receives microphone PCM frames from `audio_ai_queue`
 
-The basic audio flow is:
+The intended data flow is:
 
 ```text
-I2S microphone audio
-        ↓
+I2S microphone
+    ↓
+raw int32_t I2S samples
+    ↓
+convert to int16_t PCM
+    ↓
+audio_ai_queue
+    ↓
+afe_processing_task()
+    ↓
 audio_afe_feed()
-        ↓
-ESP-SR AFE pipeline
-        ↓
-AEC / NS / VAD
-        ↓
+    ↓
+ESP-SR AFE pipeline: NS / VAD / optional AEC
+    ↓
 audio_afe_fetch()
-        ↓
-processed audio + VAD state
+    ↓
+update AFE_STATE
 ```
 
-## File Structure
+---
 
-Required component layout:
+## File Layout
+
+Recommended component structure:
 
 ```text
 components/dsp_engine/
 ├── CMakeLists.txt
-├── idf_component.yml
 ├── afe.c
+├── i2s_mic.c
 └── include/
-    └── afe.h
+    ├── afe.h
+    └── audio_hal.h
 ```
 
-The `afe.c` file owns the ESP-SR AFE instance.
+`afe.c` owns the ESP-SR AFE instance.
 
-The `afe.h` file exposes a clean API that other files, such as `main.c`, can use.
+`afe.h` exposes the public API used by the rest of the application.
 
+---
 
+# `afe.h`
 
-## `afe.h`
-
-### Purpose of `afe.h`
-
-The header file `afe.h` declares the public interface of the AFE module.
-
-Other parts of the program should include:
+## `AFE_FEED_SAMPLES`
 
 ```c
-#include "afe.h"
+#define AFE_FEED_SAMPLES 160
 ```
 
-and use the functions declared there.
+`AFE_FEED_SAMPLES` defines how many microphone PCM samples are sent per AFE feed frame.
 
-The rest of the program should **not** directly interact with:
+For the current setup:
+
+```text
+AFE_FEED_SAMPLES = 160 samples
+sample rate      = 16000 Hz
+duration         = 160 / 16000 = 10 ms
+```
+
+So each feed frame represents about **10 ms** of mono audio.
+
+The microphone queue should use this size:
 
 ```c
-esp_afe_sr_data_t
-esp_afe_sr_iface_t
-afe_config_t
-afe_fetch_result_t
+audio_ai_queue = xQueueCreate(1, AFE_FEED_SAMPLES * sizeof(int16_t));
 ```
 
-Those ESP-SR-specific objects should stay hidden inside `afe.c`.
+---
 
-
-## Main Types
-
-#### `audio_afe_vad_state_t`
+## `audio_afe_vad_state_t`
 
 ```c
 typedef enum {
-    AUDIO_AFE_VAD_SILENCE = 0,
-    AUDIO_AFE_VAD_SPEECH,
-    AUDIO_AFE_VAD_UNKNOWN,
+  AUDIO_AFE_VAD_SILENCE = 0,
+  AUDIO_AFE_VAD_SPEECH,
+  AUDIO_AFE_VAD_UNKNOWN,
 } audio_afe_vad_state_t;
 ```
 
-This enum represents the simplified VAD state returned by the AFE module.
+This enum represents the project-level VAD state.
 
-It hides the ESP-SR-specific VAD state type from the rest of the program.
-
-#### States
-
-```c
-AUDIO_AFE_VAD_SILENCE
+```text
+AUDIO_AFE_VAD_SILENCE = silence / non-speech
+AUDIO_AFE_VAD_SPEECH  = speech detected
+AUDIO_AFE_VAD_UNKNOWN = unmapped or unexpected state
 ```
 
-Means the AFE currently detects silence or non-speech noise.
+---
 
-```c
-AUDIO_AFE_VAD_SPEECH
-```
-
-Means the AFE currently detects speech.
-
-```c
-AUDIO_AFE_VAD_UNKNOWN
-```
-
-Means the returned VAD state was not recognized or could not be mapped cleanly.
-
-
-#### `audio_afe_result_t`
+## `audio_afe_result_t`
 
 ```c
 typedef struct {
-    int16_t *data;
-    int samples;
-    int channels;
-    audio_afe_vad_state_t vad_state;
+  int16_t *data;
+  int samples;
+  int channels;
+  audio_afe_vad_state_t vad_state;
 } audio_afe_result_t;
 ```
 
-This struct is filled by:
+This struct stores the result returned from `audio_afe_fetch()`.
 
-```c
-audio_afe_fetch(&result);
-```
-
-It contains the processed audio frame and the current VAD state.
-
-#### Fields
+### Fields
 
 ```c
 int16_t *data;
 ```
 
-Pointer to processed audio returned by ESP-SR AFE.
-
-This memory is owned by ESP-SR. Do **not** call `free()` on it.
+Pointer to processed audio returned by ESP-SR. This pointer is owned by ESP-SR. Do **not** free it.
 
 ```c
 int samples;
 ```
 
-Number of `int16_t` samples in the returned audio frame.
+Number of `int16_t` samples returned.
 
 ```c
 int channels;
 ```
 
-Number of output channels returned by the AFE.
+Number of output channels.
 
 ```c
 audio_afe_vad_state_t vad_state;
 ```
 
-Simplified speech/silence state.
+Converted project-level VAD state.
 
+---
 
-## Public API
+# Public API
 
-### `audio_afe_init`
+## `audio_afe_init`
 
 ```c
 esp_err_t audio_afe_init(const char *input_format);
 ```
 
-Initializes the ESP-SR Audio Front End.
-
-This function should be called once before using:
-
-```c
-audio_afe_feed()
-audio_afe_fetch()
-```
+Initializes the ESP-SR AFE.
 
 Example:
 
 ```c
-audio_afe_init("M");
+esp_err_t ret = audio_afe_init("M");
+if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "AFE initialization failed");
+    return;
+}
 ```
 
-### Input Format
+---
 
-The `input_format` string tells ESP-SR how many channels are being fed into the AFE and what each channel represents.
+## Input Format
 
-Common examples:
+The `input_format` string describes the input channel layout.
 
 ```text
-"M"
+"M"    = one microphone channel
+"MM"   = two microphone channels
+"MR"   = one microphone channel + one playback reference channel
+"MMR"  = two microphone channels + one playback reference channel
 ```
 
-One microphone channel.
-
-Use this for a single I2S MEMS microphone.
-
-```text
-"MM"
-```
-
-Two microphone channels.
-
-Use this if the board has two microphones.
-
-```text
-"MR"
-```
-
-One microphone channel and one playback reference channel.
-
-Use this for AEC.
-
-```text
-"MMR"
-```
-
-Two microphone channels and one playback reference channel.
-
-
-### Meaning of Channel Letters
-
-```text
-M = microphone channel
-R = reference playback channel
-N = unused/null channel
-```
-
-For a simple MEMS microphone setup, use:
+For the current single MEMS microphone setup, use:
 
 ```c
 audio_afe_init("M");
 ```
 
-For acoustic echo cancellation, use something like:
+---
 
-```c
-audio_afe_init("MR");
-```
-
-but only if you can provide a proper reference signal.
-
-### Important AEC Requirement
+## AEC Requirement
 
 AEC means **Acoustic Echo Cancellation**.
 
-AEC removes your own speaker output from the microphone input.
-
-To do this, the AFE needs two signals:
+AEC requires a playback reference channel:
 
 ```text
-M = what the microphone hears
-R = what the speaker is playing
+M = microphone input
+R = playback reference signal
 ```
 
-Therefore, AEC does **not** work properly with only a microphone.
+The current code checks whether the input format contains `R`:
 
-For AEC, the feed buffer must contain interleaved microphone and reference samples:
-
-```text
-mic_sample_0, ref_sample_0,
-mic_sample_1, ref_sample_1,
-mic_sample_2, ref_sample_2,
-...
+```c
+bool has_reference_channel = strchr(input_format, 'R') != NULL;
 ```
 
-So for one microphone without playback reference, use:
+If there is no `R`, AEC is disabled:
+
+```c
+afe_config->aec_init = false;
+```
+
+So for:
 
 ```c
 audio_afe_init("M");
 ```
 
-not:
+AEC is correctly disabled.
 
-```c
-audio_afe_init("MR");
-```
+---
 
-
-### `audio_afe_feed`
+## `audio_afe_feed`
 
 ```c
 esp_err_t audio_afe_feed(const int16_t *pcm);
 ```
 
-Feeds one frame of raw PCM audio into the AFE.
+Feeds one frame of raw `int16_t` PCM audio into ESP-SR AFE.
 
-The buffer must contain:
+For the current setup:
 
 ```text
-feed_chunksize * feed_channels
+feed_chunksize = 160
+feed_channels  = 1
+total samples  = 160
 ```
 
-samples.
-
-The values are obtained using:
+So the input buffer should be:
 
 ```c
-int chunksize = audio_afe_get_feed_chunksize();
-int channels = audio_afe_get_feed_channels();
+int16_t mic_frame[160];
 ```
 
-Example:
+Then:
 
 ```c
-int total_samples = audio_afe_get_feed_chunksize() * audio_afe_get_feed_channels();
-
-int16_t *buffer = malloc(total_samples * sizeof(int16_t));
-
-i2s_mic_read(buffer, audio_afe_get_feed_chunksize());
-
-audio_afe_feed(buffer);
+audio_afe_feed(mic_frame);
 ```
 
+---
 
-### Required Audio Format
+## Important `feed()` Return Behavior
 
-The AFE expects:
+The current code treats only negative return values as errors:
+
+```c
+int ret = afe_handle->feed(afe_data, pcm);
+
+if (ret < 0) {
+    ESP_LOGE(TAG, "AFE feed returned: %d", ret);
+    return ESP_FAIL;
+}
+```
+
+This is important because positive return values can indicate accepted data.
+
+For example:
 
 ```text
-16 kHz sample rate
-signed 16-bit PCM
-interleaved channels
+320
 ```
 
-For one microphone channel, the buffer is simply:
+can mean:
 
 ```text
-mic_0, mic_1, mic_2, mic_3, ...
+160 samples * sizeof(int16_t) = 320 bytes accepted
 ```
 
-For `"MR"`, the buffer must be:
+So `320` should not be treated as failure.
 
-```text
-mic_0, ref_0, mic_1, ref_1, mic_2, ref_2, ...
-```
+---
 
-### `audio_afe_fetch`
+## `audio_afe_fetch`
 
 ```c
 esp_err_t audio_afe_fetch(audio_afe_result_t *out_result);
 ```
 
-Fetches one processed frame from the AFE.
+Fetches one processed output frame from ESP-SR AFE.
 
-This function returns:
+It returns:
 
-- processed audio
-- number of samples
-- number of channels
+- processed audio pointer
+- sample count
+- channel count
 - VAD state
 
 Example:
@@ -357,705 +304,701 @@ audio_afe_result_t result;
 
 if (audio_afe_fetch(&result) == ESP_OK) {
     if (result.vad_state == AUDIO_AFE_VAD_SPEECH) {
-        ESP_LOGI("APP", "Speech detected");
+        ESP_LOGI(TAG, "Speech detected");
     }
 }
 ```
 
+---
 
-### `audio_afe_get_feed_chunksize`
+## Feed Size vs Fetch Size
 
-```c
-int audio_afe_get_feed_chunksize(void);
+Feed and fetch sizes are not necessarily equal.
+
+Current observed values:
+
+```text
+feed_chunksize  = 160
+fetch_chunksize = 512
 ```
 
-Returns how many audio samples the AFE wants per feed frame.
+That means:
 
-This value should be used when reading from the I2S microphone.
+```text
+feed()  consumes 160 input samples
+fetch() returns 512 processed output samples
+```
+
+At 16 kHz:
+
+```text
+160 samples = 10 ms
+512 samples = 32 ms
+```
+
+So one `feed()` call does not necessarily produce one successful `fetch()` result.
+
+The processing task should accumulate enough fed samples before calling `fetch()`.
+
+---
+
+## `get_afe_state`
+
+```c
+audio_afe_vad_state_t get_afe_state(void);
+```
+
+Returns the latest known AFE VAD state.
+
+The state is stored internally as:
+
+```c
+static audio_afe_vad_state_t AFE_STATE;
+```
 
 Example:
 
 ```c
-int chunksize = audio_afe_get_feed_chunksize();
+if (get_afe_state() == AUDIO_AFE_VAD_SPEECH) {
+    // Speech is currently detected
+}
 ```
 
-Then read exactly that many samples:
+---
+
+## `afe_processing_task`
 
 ```c
-i2s_mic_read(buffer, chunksize);
+void afe_processing_task(void *pvParameters);
 ```
 
+This FreeRTOS task:
 
-### `audio_afe_get_feed_channels`
+1. Waits for a microphone PCM frame from `audio_ai_queue`
+2. Calls `audio_afe_feed()`
+3. Calls `audio_afe_fetch()` when enough input has accumulated
+4. Updates `AFE_STATE`
+5. Logs VAD state changes
 
-```c
-int audio_afe_get_feed_channels(void);
-```
-
-Returns the number of input channels required by the AFE.
-
-For:
+The task assumes:
 
 ```c
 audio_afe_init("M");
 ```
 
-this usually returns:
+has already been called, and that `audio_ai_queue` has already been created.
 
-```text
-1
-```
+---
 
-For:
-
-```c
-audio_afe_init("MR");
-```
-
-this usually returns:
-
-```text
-2
-```
-
-The total feed buffer size is:
-
-$$
-\Large
-\text{total samples} = \text{feed chunksize} \cdot \text{feed channels}
-$$
-
-In C:
-
-```c
-int total_samples = audio_afe_get_feed_chunksize() * audio_afe_get_feed_channels();
-```
-
-### `audio_afe_get_fetch_chunksize`
-
-```c
-int audio_afe_get_fetch_chunksize(void);
-```
-
-Returns the output frame size produced by the AFE.
-
-This can be useful if the processed audio is later sent to another module, recorded, transmitted, or analyzed.
-
-
-### `audio_afe_get_fetch_channels`
-
-```c
-int audio_afe_get_fetch_channels(void);
-```
-
-Returns the number of output channels produced by the AFE.
-
-### `audio_afe_destroy`
+## `audio_afe_destroy`
 
 ```c
 void audio_afe_destroy(void);
 ```
 
-Destroys the AFE instance and resets internal state.
+Destroys the ESP-SR AFE instance and resets internal state.
 
-Usually this is only needed if the audio pipeline is stopped or reconfigured.
+---
 
-Example:
+# `afe.c`
 
-```c
-audio_afe_destroy();
-```
+## Internal ESP-SR State
 
-## `afe.c`
-
-### Purpose of `afe.c`
-
-The `afe.c` file contains the actual ESP-SR implementation.
-
-It owns the internal ESP-SR variables:
+`afe.c` owns:
 
 ```c
-static const esp_afe_sr_iface_t *s_afe_handle = NULL;
-static esp_afe_sr_data_t *s_afe_data = NULL;
+static const esp_afe_sr_iface_t *afe_handle = NULL;
+static esp_afe_sr_data_t *afe_data = NULL;
 ```
 
-These variables are static, meaning they are private to `afe.c`.
+These should remain private to `afe.c`.
 
-Other files should not access them directly.
-
-### Internal State
-
-The module stores:
+It also stores:
 
 ```c
-static int s_feed_chunksize = 0;
-static int s_feed_channels = 0;
-static int s_fetch_chunksize = 0;
-static int s_fetch_channels = 0;
+static int feed_chunksize = 0;
+static int feed_channels = 0;
+static int fetch_chunksize = 0;
+static int fetch_channels = 0;
+static audio_afe_vad_state_t AFE_STATE;
 ```
 
-These values are filled during:
+---
+
+## External Queue
+
+`afe.c` uses:
 
 ```c
-audio_afe_init()
+extern QueueHandle_t audio_ai_queue;
 ```
 
-They are then returned by helper functions such as:
+This means the actual queue must be defined in one `.c` file only, usually `main.c`:
 
 ```c
-audio_afe_get_feed_chunksize()
-audio_afe_get_feed_channels()
+QueueHandle_t audio_ai_queue = NULL;
 ```
 
-### VAD State Conversion
+All other files should use `extern`.
 
-Inside `afe.c`, the ESP-SR VAD state is converted to the project-specific enum.
+---
 
-Example:
+## VAD State Conversion
+
+The helper:
 
 ```c
 static audio_afe_vad_state_t convert_vad_state(vad_state_t state)
-{
-    switch (state) {
-    case VAD_SPEECH:
-        return AUDIO_AFE_VAD_SPEECH;
-
-    case VAD_SILENCE:
-        return AUDIO_AFE_VAD_SILENCE;
-
-    default:
-        return AUDIO_AFE_VAD_UNKNOWN;
-    }
-}
 ```
 
-This keeps the rest of the project independent from ESP-SR's internal enum names.
-
-## Initialization Flow
-
-The initialization function follows this sequence:
+maps ESP-SR VAD states to project states:
 
 ```text
-audio_afe_init()
-        ↓
-esp_srmodel_init("model")
-        ↓
-afe_config_init(...)
-        ↓
-enable VAD
-enable NS
-enable AEC if input_format has R
-        ↓
-esp_afe_handle_from_config(...)
-        ↓
-create_from_config(...)
-        ↓
-store chunksize and channel information
+VAD_SPEECH  -> AUDIO_AFE_VAD_SPEECH
+VAD_SILENCE -> AUDIO_AFE_VAD_SILENCE
+other       -> AUDIO_AFE_VAD_UNKNOWN
 ```
 
+---
 
-### Model Loading
+# Initialization Details
+
+## Model Loading
+
+ESP-SR models are loaded with:
 
 ```c
 srmodel_list_t *models = esp_srmodel_init("model");
 ```
 
-This loads the ESP-SR model partition.
+Therefore, the partition table must contain a partition named:
 
-The name `"model"` refers to the model partition in the ESP-IDF partition table.
-
-If this fails, check that your project includes the correct model partition.
-
-
-### AFE Config Creation
-
-```c
-afe_config_t *afe_config = afe_config_init(
-    input_format,
-    models,
-    AFE_TYPE_SR,
-    AFE_MODE_HIGH_PERF
-);
+```text
+model
 ```
 
-This creates the configuration for the AFE pipeline.
+Example CSV line:
 
-The `input_format` controls the expected input channel layout.
-
-For one mic:
-
-```c
-audio_afe_init("M");
+```csv
+model,data,spiffs,,2M,
 ```
 
-For one mic plus reference:
+The name in code:
 
 ```c
-audio_afe_init("MR");
+esp_srmodel_init("model");
 ```
 
+must match the partition name exactly.
 
-### VAD Configuration
+---
 
-Inside `audio_afe_init()`, VAD is enabled with:
+## AFE Configuration
+
+The AFE is created with:
 
 ```c
-afe_config->vad_init = true;
-afe_config->vad_mode = VAD_MODE_1;
-afe_config->vad_min_noise_ms = 1000;
-afe_config->vad_min_speech_ms = 128;
-afe_config->vad_delay_ms = 128;
+afe_config_t *afe_config =
+    afe_config_init(input_format, models, AFE_TYPE_SR, AFE_MODE_HIGH_PERF);
 ```
 
 Meaning:
 
 ```text
-vad_init = true
+input_format       = "M", "MR", etc.
+models             = ESP-SR model list loaded from flash
+AFE_TYPE_SR        = speech-recognition front-end mode
+AFE_MODE_HIGH_PERF = high-performance AFE mode
 ```
 
-Turns on Voice Activity Detection.
+---
+
+## VAD Configuration
+
+The current code enables VAD with:
+
+```c
+afe_config->vad_init = true;
+afe_config->vad_mode = VAD_MODE_1;
+afe_config->vad_min_noise_ms = 500;
+afe_config->vad_min_speech_ms = 64;
+afe_config->vad_delay_ms = 128;
+```
+
+These settings are relatively sensitive.
 
 ```text
-vad_mode = VAD_MODE_1
+vad_min_noise_ms  = 500 ms  -> shorter noise adaptation window
+vad_min_speech_ms = 64 ms   -> shorter speech trigger duration
+vad_delay_ms      = 128 ms  -> speech-start cache/delay
 ```
 
-Selects the VAD aggressiveness/mode.
+Lower `vad_min_speech_ms` can make VAD react faster, but it may also increase false positives.
 
-```text
-vad_min_noise_ms = 1000
-```
+---
 
-Requires around 1000 ms of noise/silence context.
+## Noise Suppression
 
-```text
-vad_min_speech_ms = 128
-```
-
-Minimum duration before speech is considered valid.
-
-```text
-vad_delay_ms = 128
-```
-
-Adds delay/cache so the beginning of speech is less likely to be cut off.
-
-### NS Configuration
-
-NS means **Noise Suppression**.
-
-Noise suppression tries to reduce steady background noise before speech detection or recognition.
-
-In the code, this may look like:
+The current code enables NS:
 
 ```c
 afe_config->ns_init = true;
 ```
 
-Depending on the exact ESP-SR version, this field may differ or be controlled through `menuconfig`.
+NS can reduce steady noise, but it may also affect speech recognition accuracy. For testing VAD sensitivity, compare:
 
-If the line does not compile, check the installed ESP-SR headers:
-
-```bash
-grep -R "ns_init" -n managed_components/espressif__esp-sr
+```text
+VAD only
 ```
 
-### AEC Configuration
+against:
 
-AEC means **Acoustic Echo Cancellation**.
-
-In the code, AEC is enabled only if the input format contains an `R` channel:
-
-```c
-bool has_reference_channel = strchr(input_format, 'R') != NULL;
-
-if (has_reference_channel) {
-    afe_config->aec_init = true;
-} else {
-    afe_config->aec_init = false;
-}
+```text
+NS + VAD
 ```
 
-This prevents accidentally enabling AEC when no reference signal exists.
+---
 
-For a single microphone setup:
+## AEC Configuration
+
+The current code enables AEC only if `input_format` contains `R`.
+
+For a single microphone:
 
 ```c
 audio_afe_init("M");
 ```
 
-AEC will be disabled.
+AEC is disabled.
 
-For a microphone plus playback reference:
+For mic plus playback reference:
 
 ```c
 audio_afe_init("MR");
 ```
 
-AEC will be enabled.
+AEC can be enabled, but the feed buffer must contain interleaved mic/reference samples.
 
+---
 
-## Feed / Fetch Concept
+# Queue and Buffer Requirements
 
-ESP-SR AFE uses a two-step processing model:
+## Queue Creation
+
+Create the queue after `audio_afe_init()`:
+
+```c
+int feed_samples =
+    audio_afe_get_feed_chunksize() * audio_afe_get_feed_channels();
+
+audio_ai_queue = xQueueCreate(1, feed_samples * sizeof(int16_t));
+```
+
+For the current setup:
 
 ```text
-feed raw audio into AFE
-fetch processed audio/result from AFE
+feed_samples = 160
+item size    = 160 * 2 = 320 bytes
 ```
 
-The feed side accepts raw audio.
+A queue length of `1` with `xQueueOverwrite()` is recommended for real-time VAD.
 
-The fetch side returns processed audio and metadata.
+---
 
-### Feed
+## Queue Send
+
+The microphone task should send the buffer like this:
 
 ```c
-audio_afe_feed(buffer);
+xQueueOverwrite(audio_ai_queue, ai_buffer);
 ```
 
-Internally calls:
+not:
 
 ```c
-s_afe_handle->feed(s_afe_data, pcm);
+xQueueOverwrite(audio_ai_queue, &ai_buffer);
 ```
 
-The buffer must already contain the correct number of `int16_t` samples.
+`ai_buffer` already points to the first element of the frame.
 
-For `"M"`:
+---
+
+## Queue Receive
+
+The AFE task should receive like this:
+
+```c
+int16_t mic_frame[AFE_FEED_SAMPLES];
+
+xQueueReceive(audio_ai_queue, mic_frame, portMAX_DELAY);
+```
+
+---
+
+# I2S Microphone Conversion
+
+The microphone task should read raw I2S samples into:
+
+```c
+int32_t raw_samples[AFE_FEED_SAMPLES];
+```
+
+Then convert to:
+
+```c
+int16_t ai_buffer[AFE_FEED_SAMPLES];
+```
+
+Common conversion:
+
+```c
+ai_buffer[i] = (int16_t)(raw_samples[i] >> 16);
+```
+
+This assumes the MEMS microphone provides useful audio bits in the upper part of the 32-bit I2S slot.
+
+If the signal is too quiet, test:
+
+```c
+ai_buffer[i] = (int16_t)(raw_samples[i] >> 14);
+```
+
+If it clips or distorts, return to:
+
+```c
+ai_buffer[i] = (int16_t)(raw_samples[i] >> 16);
+```
+
+---
+
+# Processing Task Logic
+
+The current task waits for mic frames, feeds AFE, and fetches only after enough input has accumulated.
+
+The idea is:
 
 ```text
-buffer = [mic_0, mic_1, mic_2, ...]
+feed 160 samples
+feed 160 samples
+feed 160 samples
+feed 160 samples
+then fetch roughly 512 samples
 ```
 
-For `"MR"`:
+Because:
 
 ```text
-buffer = [mic_0, ref_0, mic_1, ref_1, ...]
+512 / 160 = 3.2
 ```
 
-### Fetch
+So roughly four feed frames are needed before a fetch is expected to succeed.
+
+---
+
+## Current Implementation Note
+
+The current code uses:
 
 ```c
-audio_afe_fetch(&result);
+int feed_bytes = 0;
+feed_bytes += AFE_FEED_SAMPLES;
 ```
 
-Internally calls:
+Despite the name, this variable counts **samples**, not bytes.
+
+A clearer name would be:
 
 ```c
-afe_fetch_result_t *result = s_afe_handle->fetch(s_afe_data);
+int fed_samples = 0;
 ```
 
-The result includes:
-
-```text
-processed audio
-VAD state
-return status
-```
-
-The wrapper copies the useful information into:
+Recommended logic:
 
 ```c
-audio_afe_result_t
+fed_samples += AFE_FEED_SAMPLES;
+
+if (fed_samples >= fetch_chunksize) {
+    audio_afe_result_t result;
+    err = audio_afe_fetch(&result);
+    fed_samples -= fetch_chunksize;
+}
 ```
 
-## How to Use From `main.c`
+Using `>=` is usually better than `>` because it also fetches when the accumulated sample count exactly equals the fetch size.
 
-Minimal usage:
+---
+
+# Common Warnings
+
+## `AEC disabled because input_format has no R reference channel`
+
+Expected for:
 
 ```c
-#include <stdlib.h>
-#include "esp_log.h"
-#include "i2s_mic.h"
-#include "afe.h"
+audio_afe_init("M");
+```
 
-static const char *TAG = "main";
+This means the system has no playback reference channel, so AEC is off.
+
+---
+
+## `wakenet model not found`
+
+Expected if WakeNet is not being used.
+
+For VAD-only projects, this can be ignored.
+
+---
+
+## `Ringbuffer of AFE is empty`
+
+Means `fetch()` was called before enough processed output was ready.
+
+Usually caused by:
+
+- fetching too often
+- not enough successful `feed()` calls yet
+- mic task too slow
+- excessive logging
+
+---
+
+## `Ringbuffer of AFE(FEED) is full`
+
+Means the AFE input side is being fed faster than output is fetched.
+
+Usually caused by:
+
+- skipping fetch too often
+- treating a successful feed return value like `320` as an error
+- logging too much in the audio path
+- feed/fetch timing imbalance
+
+---
+
+# Recommended Main Setup
+
+```c
+QueueHandle_t audio_ai_queue = NULL;
 
 void app_main(void)
 {
-    i2s_mic_init();
+    esp_err_t err = audio_afe_init("M");
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "AFE init failed");
+        return;
+    }
 
-    audio_afe_init("M");
+    int feed_samples =
+        audio_afe_get_feed_chunksize() * audio_afe_get_feed_channels();
 
-    int chunksize = audio_afe_get_feed_chunksize();
-    int channels = audio_afe_get_feed_channels();
+    if (feed_samples != AFE_FEED_SAMPLES) {
+        ESP_LOGE(TAG, "AFE feed size mismatch: macro=%d, afe=%d",
+                 AFE_FEED_SAMPLES, feed_samples);
+        return;
+    }
 
-    int total_samples = chunksize * channels;
+    audio_ai_queue = xQueueCreate(1, feed_samples * sizeof(int16_t));
+    if (audio_ai_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create audio queue");
+        return;
+    }
 
-    int16_t *buffer = malloc(total_samples * sizeof(int16_t));
+    err = audio_hal_mic_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Mic init failed");
+        return;
+    }
+
+    xTaskCreatePinnedToCore(audio_hal_mic_read_task, "Mic_Read_Task", 4096, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(afe_processing_task, "AFE_Proc_Task", 8192, NULL, 5, NULL, 0);
+}
+```
+
+---
+
+# Recommended Microphone Send
+
+```c
+int32_t raw_samples[AFE_FEED_SAMPLES];
+int16_t ai_buffer[AFE_FEED_SAMPLES];
+
+size_t bytes_read = 0;
+
+esp_err_t err = i2s_channel_read(
+    rx_handle,
+    raw_samples,
+    sizeof(raw_samples),
+    &bytes_read,
+    portMAX_DELAY
+);
+
+if (err == ESP_OK && bytes_read > 0) {
+    int samples_read = bytes_read / sizeof(int32_t);
+
+    for (int i = 0; i < samples_read && i < AFE_FEED_SAMPLES; i++) {
+        ai_buffer[i] = (int16_t)(raw_samples[i] >> 16);
+    }
+
+    for (int i = samples_read; i < AFE_FEED_SAMPLES; i++) {
+        ai_buffer[i] = 0;
+    }
+
+    xQueueOverwrite(audio_ai_queue, ai_buffer);
+}
+```
+
+---
+
+# Recommended AFE Task Loop
+
+```c
+void afe_processing_task(void *pvParameters)
+{
+    int16_t mic_frame[AFE_FEED_SAMPLES];
+    int fed_samples = 0;
+
+    AFE_STATE = AUDIO_AFE_VAD_SILENCE;
 
     while (1) {
-        i2s_mic_read(buffer, chunksize);
+        if (xQueueReceive(audio_ai_queue, mic_frame, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
 
-        audio_afe_feed(buffer);
+        esp_err_t err = audio_afe_feed(mic_frame);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to feed AFE: %s", esp_err_to_name(err));
+            continue;
+        }
+
+        fed_samples += AFE_FEED_SAMPLES;
+
+        if (fed_samples < fetch_chunksize) {
+            continue;
+        }
+
+        fed_samples -= fetch_chunksize;
 
         audio_afe_result_t result;
+        err = audio_afe_fetch(&result);
 
-        if (audio_afe_fetch(&result) == ESP_OK) {
+        if (err != ESP_OK) {
+            continue;
+        }
+
+        if (result.vad_state != AFE_STATE) {
             if (result.vad_state == AUDIO_AFE_VAD_SPEECH) {
-                ESP_LOGI(TAG, "Speech detected");
+                ESP_LOGI(TAG, "[VAD] Speech detected!");
             } else if (result.vad_state == AUDIO_AFE_VAD_SILENCE) {
-                ESP_LOGI(TAG, "Silence");
+                ESP_LOGI(TAG, "[VAD] Silence...");
+            } else {
+                ESP_LOGW(TAG, "[VAD] Unknown VAD state.");
             }
+
+            AFE_STATE = result.vad_state;
         }
     }
 }
 ```
 
-## How It Connects to `i2s_mic.c`
+---
 
-The microphone module should only handle raw microphone input.
+# Build Requirements
 
-The `i2s_mic.c` file should provide functions such as:
-
-```c
-esp_err_t i2s_mic_init(void);
-esp_err_t i2s_mic_read(int16_t *buffer, int samples);
-```
-
-The AFE module expects `i2s_mic_read()` to fill the buffer with:
-
-```text
-signed 16-bit PCM
-16 kHz sample rate
-mono samples for input_format "M"
-```
-
-If the I2S microphone provides 24-bit or 32-bit samples, `i2s_mic.c` should convert them to `int16_t`.
-
-Example conversion:
-
-```c
-int16_t pcm_sample = raw_sample >> 16;
-```
-
-The exact shift depends on the microphone format and I2S configuration.
-
-
-## When to Use `"M"` vs `"MR"`
-
-### Use `"M"` when you only have a microphone
-
-```c
-audio_afe_init("M");
-```
-
-This supports:
-
-```text
-VAD
-NS
-single microphone processing
-```
-
-This is the correct starting point for most simple ESP32-S3 MEMS microphone projects.
-
-
-### Use `"MR"` when you have microphone + speaker reference
-
-```c
-audio_afe_init("MR");
-```
-
-This supports:
-
-```text
-VAD
-NS
-AEC
-```
-
-But it requires the feed buffer to include both:
-
-```text
-microphone input
-speaker playback reference
-```
-
-Without the reference channel, AEC cannot work correctly.
-
-
-## CMake Requirements
-
-The `audio_hal` component must require both the I2S driver and ESP-SR:
+The component should require ESP-SR and I2S driver support:
 
 ```cmake
 idf_component_register(
     SRCS
         "afe.c"
+        "i2s_mic.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
+        driver
         esp-sr
+        freertos
 )
 ```
 
-The `main` component should require `audio_hal`:
-
-```cmake
-idf_component_register(
-    SRCS "main.c"
-    INCLUDE_DIRS "."
-    REQUIRES audio_hal
-)
-```
-
-## Component Manifest
-
-The `audio_hal` component should contain:
+The ESP-SR dependency should be in:
 
 ```text
-components/audio_hal/idf_component.yml
+components/dsp_engine/idf_component.yml
 ```
 
-with:
+Example:
 
 ```yaml
 dependencies:
   espressif/esp-sr: "^2.4.4"
 ```
 
-Then clean and rebuild:
+---
 
-```bash
-rm -rf build managed_components dependencies.lock
-idf.py set-target esp32s3
-idf.py reconfigure
-idf.py build
-```
+# Partition Requirement
 
-## Common Problems
-
-### `esp-sr` unknown name
-
-Error:
+ESP-SR models are loaded from the partition named:
 
 ```text
-Failed to resolve component 'esp-sr'
+model
 ```
 
-Possible causes:
+Example partition CSV:
 
-- `idf_component.yml` is missing
-- file is named incorrectly
-- file is in the wrong component folder
-- dependency was not downloaded
-- `managed_components` is stale
-
-Fix:
-
-```bash
-rm -rf build managed_components dependencies.lock
-idf.py reconfigure
+```csv
+# Name,Type,SubType,Offset,Size,Flags
+nvs,data,nvs,0x9000,0x6000,
+phy_init,data,phy,0xf000,0x1000,
+factory,app,factory,0x10000,3M,
+model,data,spiffs,,2M,
 ```
 
-### `ns_init` or `aec_init` does not exist
+The code:
 
-The installed ESP-SR version may use different config fields.
-
-Check the installed headers:
-
-```bash
-grep -R "ns_init" -n managed_components/espressif__esp-sr
-grep -R "aec_init" -n managed_components/espressif__esp-sr
-grep -R "typedef struct.*afe_config" -n managed_components/espressif__esp-sr
+```c
+esp_srmodel_init("model");
 ```
 
-Then adjust `afe.c` according to the actual available fields.
-
-### No speech detected
-
-Check:
-
-- microphone wiring
-- I2S pin mapping
-- sample rate is 16 kHz
-- audio is converted to signed 16-bit PCM
-- microphone is not saturating/clipping
-- `audio_afe_init("M")` is used for one mic
-- `i2s_mic_read()` fills exactly the expected frame size
-
-
-### AEC does not work
-
-AEC needs a reference channel.
-
-This is not enough:
+must match the partition name:
 
 ```text
-microphone only
+model
 ```
 
-AEC needs:
+---
+
+# Summary
+
+The current `afe.c` / `afe.h` design works as follows:
 
 ```text
-microphone input + speaker playback reference
-```
+audio_afe_init("M")
+    initializes ESP-SR AFE
 
-Use:
-
-```c
-audio_afe_init("MR");
-```
-
-only when the feed buffer contains interleaved mic and reference samples.
-
-
-## Recommended Development Order
-
-1. Get `i2s_mic.c` working by printing raw volume/RMS.
-2. Convert microphone samples to signed 16-bit PCM.
-3. Initialize AFE with:
-
-```c
-audio_afe_init("M");
-```
-
-4. Feed microphone audio into AFE.
-5. Fetch VAD state.
-6. Confirm speech/silence detection.
-7. Enable or verify Noise Suppression.
-8. Add AEC only after a playback reference channel exists.
-
-
-## Summary
-
-The `afe.c` file owns the ESP-SR Audio Front End instance.
-
-The `afe.h` file exposes a clean API to the rest of the project.
-
-Use:
-
-```c
-audio_afe_init("M");
-```
-
-for a single MEMS microphone.
-
-Use:
-
-```c
-audio_afe_init("MR");
-```
-
-only when using Acoustic Echo Cancellation with a real playback reference channel.
-
-The normal runtime loop is:
-
-```text
-read I2S mic frame
-        ↓
 audio_afe_feed()
-        ↓
+    sends one 160-sample int16_t PCM frame into AFE
+
 audio_afe_fetch()
-        ↓
-check result.vad_state
+    retrieves one processed AFE frame and VAD state
+
+afe_processing_task()
+    receives PCM frames from audio_ai_queue
+    feeds AFE
+    fetches output after enough samples have accumulated
+    updates AFE_STATE
+
+get_afe_state()
+    returns the latest VAD state
 ```
 
-This keeps the project clean:
+Important design rules:
 
 ```text
-i2s_mic.c  -> raw microphone input
-afe.c      -> ESP-SR VAD / NS / AEC pipeline
-main.c     -> application logic
+Use 160-sample int16_t PCM feed frames.
+Do not treat positive feed return values as errors.
+Do not fetch after every single feed when fetch size is larger.
+Use queue item size AFE_FEED_SAMPLES * sizeof(int16_t).
+Use xQueueOverwrite() with queue length 1 for real-time audio.
+Keep logging minimal inside audio loops.
 ```

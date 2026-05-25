@@ -1,8 +1,12 @@
+#include "afe.h"
 #include "driver/i2s_std.h"
 #include "driver/uart.h"
+#include "esp_err.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
+#include "freertos/projdefs.h"
 #include "freertos/task.h"
 #include "global_config.h"
 // #include "log_tags.h"
@@ -14,12 +18,7 @@ static i2s_chan_handle_t rx_handle;
 
 extern QueueHandle_t audio_ai_queue;
 
-void audio_hal_mic_init(void) {
-#ifdef CONFIG_PRIVACY_SHIELD_BUILD_DEBUG &&CONFIG_PRIVACY_SHIELD_LOG_AUDIO
-  // Boost USB baud rate for raw sample streaming
-  uart_set_baudrate(UART_NUM_0, 2000000);
-#endif
-
+esp_err_t audio_hal_mic_init() {
   ESP_LOGI(TAG, "Initializing I2S microphone hardware...");
   i2s_chan_config_t chan_cfg =
       I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
@@ -49,6 +48,8 @@ void audio_hal_mic_init(void) {
   std_cfg.slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
   ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle, &std_cfg));
   ESP_ERROR_CHECK(i2s_channel_enable(rx_handle));
+  ESP_LOGI(TAG, "Successfully inititallized Microphone");
+  return ESP_OK;
 }
 
 void audio_hal_mic_read_task(void *pvParameters) {
@@ -69,7 +70,8 @@ void audio_hal_mic_read_task(void *pvParameters) {
                          &bytes_read, portMAX_DELAY);
 
     if (err == ESP_OK && bytes_read > 0) {
-#ifdef CONFIG_PRIVACY_SHIELD_BUILD_DEBUG &&CONFIG_PRIVACY_SHIELD_LOG_AUDIO
+#if defined(CONFIG_PRIVACY_SHIELD_BUILD_DEBUG) &&                              \
+    defined(CONFIG_PRIVACY_SHIELD_LOG_AUDIO)
       int64_t current_time = esp_timer_get_time();
       int delta_ms = (current_time - last_read_time) / 1000;
       last_read_time = current_time;
@@ -93,14 +95,17 @@ void audio_hal_mic_read_task(void *pvParameters) {
       }
 #endif
 
-      int samples_read = bytes_read / 4; // 4 bytes per 32-bit sample
+      int samples_read =
+          bytes_read /
+          4; // 4 bytes per 32-bit sample
 
-// Audio streaming phase
-#ifdef CONFIG_PRIVACY_SHIELD_BUILD_DEBUG &&CONFIG_PRIVACY_SHIELD_LOG_AUDIO
-      for (int i = 0; i < samples_read; i++) {
-        // Apply offset correction and print to serial
-        printf("%ld\n", (raw_samples[i] >> 16) - dc_offset);
-      }
+      // Audio streaming phase
+#if defined(CONFIG_PRIVACY_SHIELD_BUILD_DEBUG) &&                              \
+    defined(CONFIG_PRIVACY_SHIELD_LOG_AUDIO)
+             // for (int i = 0; i < samples_read; i++) {
+             // Apply offset correction and print to serial
+             // printf("%ld\n", (raw_samples[i] >> 16) - dc_offset);
+             // }
 #endif
 
       // Convert 32-bit I2S data to 16-bit standard audio for the AI
@@ -111,7 +116,9 @@ void audio_hal_mic_read_task(void *pvParameters) {
 
       // Send the chunk of audio to the DSP Engine
       if (audio_ai_queue != NULL) {
-        xQueueSend(audio_ai_queue, ai_buffer, 0);
+        if (xQueueOverwrite(audio_ai_queue, ai_buffer) != pdTRUE) {
+          ESP_LOGE(TAG, "Failed to send Microphone data");
+        }
       }
     }
   }

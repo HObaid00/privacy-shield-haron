@@ -3,10 +3,10 @@
 /* -------------------------------------------------------------------------- */
 /*  I2S Microphone (MEMS) pins                                              */
 /* -------------------------------------------------------------------------- */
-#define PIN_I2S_MIC_LRCLK                                                      \
-  GPIO_NUM_4 /* Left-right clock (word select) / LRCL / WS */
-#define PIN_I2S_MIC_DIN GPIO_NUM_5  /* Data in (from mic) / DIN / SD */
-#define PIN_I2S_MIC_BCLK GPIO_NUM_6 /* Bit clock / BCLK / SCK */
+
+#define PIN_I2S_MIC_LRCLK GPIO_NUM_4 /* L/R clock (word select) / LRCL / WS */
+#define PIN_I2S_MIC_DIN GPIO_NUM_5   /* Data in (from mic) / DIN / SD */
+#define PIN_I2S_MIC_BCLK GPIO_NUM_6  /* Bit clock / BCLK / SCK */
 
 /* -------------------------------------------------------------------------- */
 /*  I2S Amplifier (MAX98357A) pins                                          */
@@ -25,9 +25,8 @@
 /* -------------------------------------------------------------------------- */
 /*  Node defaults                                                            */
 /* -------------------------------------------------------------------------- */
-#define DEFAULT_NODE_ID 1 /* Change per device (1–254). 0 = hub. */
+#define DEFAULT_NODE_ID 2 /* Change per device (1–254). 0 = hub. */
 
 /* -------------------------------------------------------------------------- */
-/*  Global Variables                                                          */
+/* Global Variables                                                           */
 /* -------------------------------------------------------------------------- */
-#define AFE_FEED_SAMPLES 160

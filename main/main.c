@@ -14,7 +14,7 @@
 static const char *TAG = "MAIN_APP";
 
 // Shared Queue handling raw audio chunks between Core 1 and Core 0
-QueueHandle_t audio_ai_queue;
+QueueHandle_t audio_ai_queue = NULL;
 
 /* -------------------------------------------------------------------------- */
 /*  Hello task — broadcast our presence every 5 seconds                       */
@@ -83,60 +83,9 @@ static void on_mesh_packet(const uint8_t *src_mac, const void *data,
 }
 
 /* -------------------------------------------------------------------------- */
-/* AFE Processing Task — Pulls from queue, processes VAD                      */
-/* -------------------------------------------------------------------------- */
-static void afe_processing_task(void *arg) {
-
-  // Allocate space matching our expected I2S Mic frame chunk size (512 samples)
-  int expected_chunks = audio_afe_get_feed_chunksize();
-  int16_t mic_frame[expected_chunks];
-  audio_afe_result_t afe_res;
-
-  // Track VAD state change to avoid spamming the log console
-  audio_afe_vad_state_t last_vad_state = AUDIO_AFE_VAD_SILENCE;
-
-  ESP_LOGI(TAG, "AFE processing task started on Core %d", xPortGetCoreID());
-
-  while (1) {
-
-    // Wait indefinitely until a raw mic chunk arrives from Core 1
-    if (xQueueReceive(audio_ai_queue, mic_frame, portMAX_DELAY) == pdTRUE) {
-
-      // 1. Feed the 16-bit PCM block into the ESP Front End Engine
-      esp_err_t err = audio_afe_fetch(&afe_res);
-      if (err != ESP_OK) {
-        vTaskDelay(pdMS_TO_TICKS(5));
-        continue;
-      }
-
-      // 2. Fetch the calculated result from the AFE processing block
-      if (err == ESP_OK) {
-
-        // Only print when the speech state actually flips
-        if (afe_res.vad_state != last_vad_state) {
-          if (afe_res.vad_state == AUDIO_AFE_VAD_SPEECH) {
-            ESP_LOGI(TAG, "[VAD] Speech Detected!");
-          } else if (afe_res.vad_state == AUDIO_AFE_VAD_SILENCE) {
-            ESP_LOGI(TAG, "[VAD] Silence...");
-          } else {
-            ESP_LOGW(TAG, "[VAD] Unknown VAD state.");
-          }
-          last_vad_state = afe_res.vad_state;
-        }
-      } else {
-        ESP_LOGE(TAG, "Failed to feed audio to AFE");
-      }
-    }
-  }
-}
-
-/* -------------------------------------------------------------------------- */
 /* Entry point                                                               */
 /* -------------------------------------------------------------------------- */
 void app_main(void) {
-  // Initialize physical I2S Hardware
-  audio_hal_mic_init();
-
   // Initialize the ESP-SR Audio Front End in Single Microphone mode ("M")
   esp_err_t afe_err = audio_afe_init("M");
   if (afe_err != ESP_OK) {
@@ -146,14 +95,21 @@ void app_main(void) {
 
   // Double check internal ESP-SR expectations against our hardware sample
   // layouts
-  int expected_chunk = audio_afe_get_feed_chunksize();
-  ESP_LOGI(TAG, "AFE Engine expects chunk size of: %d samples", expected_chunk);
+  ESP_LOGI(TAG, "AFE Engine expects chunk size of: %d samples",
+           AFE_FEED_SAMPLES);
 
-  // Create the FreeRTOS Queue to hold 10 chunks of 512-sample int16 arrays
-  audio_ai_queue = xQueueCreate(10, expected_chunk * sizeof(int16_t));
+  audio_ai_queue = xQueueCreate(1, AFE_FEED_SAMPLES * sizeof(int16_t));
   if (audio_ai_queue == NULL) {
     ESP_LOGE(TAG, "Critical: Failed to create audio queue!");
     return;
+  }
+
+  // Initialize physical I2S Hardware
+  esp_err_t mic_init = audio_hal_mic_init();
+  if (mic_init != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to initilaize Microphone");
+  } else {
+    ESP_LOGI(TAG, "Successfuly initialized Microphone");
   }
 
   // Spawn the hardware reading loop on Core 1 (Pin down to decouple ISR/DMA
@@ -162,9 +118,8 @@ void app_main(void) {
                           5, NULL, 1);
 
   // Spawn the AFE Heavy DSP Processing Loop on Core 0
-  // xTaskCreatePinnedToCore(afe_processing_task, "AFE_Proc_Task", 8192, NULL,
-  // 5,
-  //                         NULL, 0);
+  xTaskCreatePinnedToCore(afe_processing_task, "AFE_Proc_Task", 8192, NULL, 5,
+                          NULL, 0);
 
   ESP_LOGI(TAG, "System Pipeline Up and Operational.");
 }
