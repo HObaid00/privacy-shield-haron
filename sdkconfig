@@ -594,6 +594,21 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
+# Privacy Shield Configuration
+#
+CONFIG_PRIVACY_SHIELD_BUILD_DEBUG=y
+# CONFIG_PRIVACY_SHIELD_BUILD_PRODUCTION is not set
+CONFIG_PRIVACY_SHIELD_DEBUG_MODE=y
+
+#
+# Subsystem Log Levels
+#
+CONFIG_PRIVACY_SHIELD_LOG_MESH=y
+CONFIG_PRIVACY_SHIELD_LOG_AUDIO=y
+# end of Subsystem Log Levels
+# end of Privacy Shield Configuration
+
+#
 # ESP Speech Recognition
 #
 CONFIG_MODEL_IN_FLASH=y
