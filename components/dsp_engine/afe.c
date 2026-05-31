@@ -14,11 +14,12 @@
 #include "freertos/projdefs.h"
 #include "global_config.h"
 #include "model_path.h"
+#include "log_tags.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 
-static const char *TAG = "LOG_TAG_AUDIO_AFE";
+static const char *TAG = LOG_TAG_AUDIO_AFE;
 
 static const esp_afe_sr_iface_t *afe_handle = NULL;
 static esp_afe_sr_data_t *afe_data = NULL;
