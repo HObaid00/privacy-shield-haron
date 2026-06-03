@@ -89,31 +89,31 @@ static void on_mesh_packet(const uint8_t *src_mac, const void *data, size_t len)
     const mesh_header_t *hdr = (const mesh_header_t *)data;
 
     switch (hdr->type) {
-        case MESH_PKT_HELLO:
-            ESP_LOGI(TAG, "HELLO from node %u (" MACSTR ")", hdr->src_id, MAC2STR(src_mac));
-            break;
+    case MESH_PKT_HELLO:
+        ESP_LOGI(TAG, "HELLO from node %u (" MACSTR ")", hdr->src_id, MAC2STR(src_mac));
+        break;
 
-        case MESH_PKT_STATUS:
-            if (len >= sizeof(mesh_status_pkt_t)) {
-                const mesh_status_pkt_t *status = (const mesh_status_pkt_t *)data;
-                ESP_LOGI(TAG, "STATUS from node %u: masking=%s vol=%u batt=%u%%",
-                         status->header.src_id, status->masking_active ? "ON" : "OFF",
-                         status->volume, status->battery_pct);
-            }
-            break;
+    case MESH_PKT_STATUS:
+        if (len >= sizeof(mesh_status_pkt_t)) {
+            const mesh_status_pkt_t *status = (const mesh_status_pkt_t *)data;
+            ESP_LOGI(TAG, "STATUS from node %u: masking=%s vol=%u batt=%u%%",
+                     status->header.src_id, status->masking_active ? "ON" : "OFF",
+                     status->volume, status->battery_pct);
+        }
+        break;
 
-        case MESH_PKT_COMMAND:
-            if (len >= sizeof(mesh_command_pkt_t)) {
-                const mesh_command_pkt_t *cmd = (const mesh_command_pkt_t *)data;
-                ESP_LOGI(TAG, "COMMAND from node %u: cmd=%u val=%u", cmd->header.src_id,
-                         cmd->command, cmd->value);
-                /* Future: act on mute/unmute/volume commands here */
-            }
-            break;
+    case MESH_PKT_COMMAND:
+        if (len >= sizeof(mesh_command_pkt_t)) {
+            const mesh_command_pkt_t *cmd = (const mesh_command_pkt_t *)data;
+            ESP_LOGI(TAG, "COMMAND from node %u: cmd=%u val=%u", cmd->header.src_id,
+                     cmd->command, cmd->value);
+            /* Future: act on mute/unmute/volume commands here */
+        }
+        break;
 
-        default:
-            ESP_LOGD(TAG, "Unknown packet type 0x%02X from node %u", hdr->type, hdr->src_id);
-            break;
+    default:
+        ESP_LOGD(TAG, "Unknown packet type 0x%02X from node %u", hdr->type, hdr->src_id);
+        break;
     }
 }
 
